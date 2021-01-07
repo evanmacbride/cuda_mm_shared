@@ -13,13 +13,23 @@
     } \
   } while (0)
 
-const int default_dim = 8192;
+//const int default_dim = 8192;
+const int default_dim = 1024;
 const int block_size = 32; // The CUDA max is 1024 threads per block
 const float A_val = 3.0f;
 const float B_val = 2.0f;
 const float tol = 1e-8;
 
-//__global__ void mmul(const float *A, const float *B, float *C, int ds) {
+void verifyResult(const float *res, const float *ref, int size) {
+  for (int i = 0; i < size; i++) { 
+    if (abs(res[i] - ref[i]) > tol) {
+      printf("mismatch at index %d, was: %f, should be: %f\n", 
+		      i, res[i], ref[i]); 
+    }
+  }
+  printf("Success!\n");
+}
+
 __global__ void mmul(const float *A, const float *B, float *C, int n, int m, int q) {
   __shared__ float As[block_size][block_size];
   __shared__ float Bs[block_size][block_size];
@@ -27,29 +37,21 @@ __global__ void mmul(const float *A, const float *B, float *C, int n, int m, int
   int idx = threadIdx.x + blockDim.x * blockIdx.x;
   int idy = threadIdx.y + blockDim.y * blockIdx.y;
 
-  //if ((idx < ds) && (idy < ds)) {
-  if ((idx < n) && (idy < m)) {
-    float temp = 0;
-    //for (int i = 0; i < ds/block_size; i++) {
-    for (int i = 0; i < q; i++) {
-      //As[threadIdx.y][threadIdx.x] = A[idy*ds + (i*block_size + threadIdx.x)];
-      As[threadIdx.y][threadIdx.x] = A[idy * q + i + threadIdx.x];
-      //Bs[threadIdx.y][threadIdx.x] = B[(i*block_size + threadIdx.y) * ds + idx];
-      Bs[threadIdx.y][threadIdx.x] = B[i * n + threadIdx.y * n + idx];
-      __syncthreads();
+  float temp = 0;
+  for (int i = 0; i < q; i++) {
+    As[threadIdx.y][threadIdx.x] = A[idy * q + i + threadIdx.x];
+    Bs[threadIdx.y][threadIdx.x] = B[i * n + threadIdx.y * n + idx];
+    __syncthreads();
 
-      //for (int k = 0; k < block_size; k++) {
-      for (int k = 0; k < blockDim.x; k++) {
-	temp += As[threadIdx.y][k] * Bs[k][threadIdx.x];
-      }
-      __syncthreads();
+    for (int k = 0; k < blockDim.x; k++) {
+      temp += As[threadIdx.y][k] * Bs[k][threadIdx.x];
     }
-    //C[idy*ds+idx] = temp;
-    C[idy * n + idx] = temp;
+    __syncthreads();
   }
+  C[idy * n + idx] = temp;
 }
 
-int main(int argc, char* argv) {
+int main(int argc, char* argv[]) {
   float *h_A, *h_B, *h_C, *h_check, *d_A, *d_B, *d_C;
   clock_t t0, t1, t2;
   double t1sum = 0.0;
@@ -103,7 +105,7 @@ int main(int argc, char* argv) {
       h_check[i*q+j] = temp;
       h_C[i*q+j] = 0.0;
       }
-
+  
   /*
   // printout for debugging
   for (int i = 0; i < m; i++) {
@@ -126,14 +128,12 @@ int main(int argc, char* argv) {
   cudaMemcpy(d_B, h_B, p*q*sizeof(float), cudaMemcpyHostToDevice);
   cudaCheckErrors("cudaMemcpy H2D failture");
 
-  //int x_blocks = n / block_size;
-  //int y_blocks = m / block_size;
-
+  int x_blocks = n / block_size;
+  int y_blocks = m / block_size;
   dim3 block(block_size, block_size);
-  //dim3 grid((DSIZE+block.x-1)/block.x, (DSIZE+block.y-1)/block.y);
-  dim3 grid((n+block.x-1)/block.x, (m+block.y-1)/block.y);
+  dim3 grid(x_blocks, y_blocks);
+  
   // Calcuate AxB=C on the device
-  //mmul<<<grid, block>>>(d_A, d_B, d_C, DSIZE);
   mmul<<<grid, block>>>(d_A, d_B, d_C, n, m, q);
   cudaCheckErrors("kernel launch failure");
 
@@ -146,14 +146,7 @@ int main(int argc, char* argv) {
   cudaCheckErrors("Kernel execution failure or cudaMemcpy H2D failure");
 
   // Check for correctness
-  for (int i = 0; i < m*q; i++) { 
-    if (abs(h_C[i] - h_check[i]) > tol) {
-      printf("mismatch at index %d, was: %f, should be: %f\n", 
-		      i, h_C[i], h_check[i]); 
-      return -1;
-    }
-  }
-  printf("Success!\n");
+  verifyResult(h_C, h_check, m*q);
 
   // Cleanup
   cudaFree(d_A);
