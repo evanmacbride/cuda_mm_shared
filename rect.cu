@@ -21,19 +21,21 @@ const float A_val = 3.0f;
 const float B_val = 2.0f;
 const float tol = 1e-8;
 
-void verifyResult(const float *res, const float *ref, int size) {
+int verifyResult(const float *res, const float *ref, int size) {
   for (int i = 0; i < size; i++) { 
     if (abs(res[i] - ref[i]) > tol) {
       printf("mismatch at index %d, was: %f, should be: %f\n", 
-		      i, res[i], ref[i]); 
+		      i, res[i], ref[i]);
+      return -1; 
     }
   }
   printf("Success!\n");
+  return 0;
 }
 
-__global__ void mmul(const float *A, const float *B, float *C, int n, int m, int q) {
-  __shared__ float As[SHARED_SIZE];
-  __shared__ float Bs[SHARED_SIZE];
+__global__ void mmul(const float *A, const float *B, float *C, int n, int m, int q, int ssize) {
+  __shared__ float As[ssize];
+  __shared__ float Bs[ssize];
 
   int idx = threadIdx.x + blockDim.x * blockIdx.x;
   int idy = threadIdx.y + blockDim.y * blockIdx.y;
@@ -135,9 +137,9 @@ int main(int argc, char* argv[]) {
   dim3 grid(x_blocks, y_blocks);
   
   // Calcuate AxB=C on the device
-  mmul<<<grid, block>>>(d_A, d_B, d_C, n, m, q);
+  mmul<<<grid, block>>>(d_A, d_B, d_C, n, m, q, SHARED_SIZE);
   cudaCheckErrors("kernel launch failure");
-
+  cudaDeviceSynchronize();
   cudaMemcpy(h_C, d_C, m*q*sizeof(float), cudaMemcpyDeviceToHost);
 
   t2 = clock();
